@@ -89,6 +89,10 @@ def save_row(row: dict, user_id: str) -> bool:
 
 
 def metabolism_chart(row: dict) -> dict:
+    point_bmr = katch_mcardle_bmr(row["weight_kg"], row["body_fat_pct"])
+    point_age, _ = metabolic_age(
+        row["height_cm"], row["weight_kg"], row["body_fat_pct"], row["sex"]
+    )
     ages = list(range(18, 91))
     values = [
         {
@@ -102,8 +106,8 @@ def metabolism_chart(row: dict) -> dict:
     ]
     values.append(
         {
-            "年齢": row["metabolic_age"],
-            "基礎代謝量": row["bmr_kcal"],
+            "年齢": point_age,
+            "基礎代謝量": point_bmr,
             "系列": "本人",
         }
     )
@@ -302,6 +306,17 @@ if calculated:
 
 pending = st.session_state.get("pending_measurement")
 if pending:
+    # Recalculate derived values from the pending inputs on every rerun. This
+    # prevents stale session values from disagreeing with the chart.
+    pending_bmr = katch_mcardle_bmr(
+        pending["weight_kg"], pending["body_fat_pct"]
+    )
+    pending_age, pending_clamped = metabolic_age(
+        pending["height_cm"], pending["weight_kg"], pending["body_fat_pct"], pending["sex"]
+    )
+    pending["bmr_kcal"] = round(pending_bmr, 1)
+    pending["metabolic_age"] = round(pending_age, 1)
+    st.session_state["pending_clamped"] = pending_clamped
     st.subheader("計算結果")
     saved_label = "登録済み" if st.session_state.get("pending_saved") else "まだ登録されていません"
     st.caption(f"測定日: {pending['measurement_date']}　※{saved_label}")
