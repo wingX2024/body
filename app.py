@@ -230,10 +230,16 @@ if "auth_user" not in st.session_state:
                     else:
                         st.success("確認メールを送信しました。メール内のリンクを開いてからログインしてください。")
                 except AuthApiError as exc:
-                    st.error(
-                        "アカウントを作成できませんでした。"
-                        f" エラーコード: {exc.code or exc.status} / メッセージ: {exc.message}"
-                    )
+                    if exc.code == "over_email_send_rate_limit":
+                        st.error(
+                            "Supabaseの確認メール送信上限に達しました。約1時間待ってから再試行するか、"
+                            "Supabaseで独自SMTPを設定してください。"
+                        )
+                    else:
+                        st.error(
+                            "アカウントを作成できませんでした。"
+                            f" エラーコード: {exc.code or exc.status} / メッセージ: {exc.message}"
+                        )
                 except Exception:
                     st.error("アカウントを作成できませんでした。入力内容またはSupabase Authの設定を確認してください。")
     st.info("ログインした利用者ごとにデータを分離して保存します。")
