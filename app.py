@@ -4,7 +4,6 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
-import altair as alt
 from supabase import Client, create_client
 
 from calculations import (
@@ -78,49 +77,63 @@ def save_row(row: dict) -> bool:
     return existed
 
 
-def metabolism_chart(row: dict) -> alt.Chart:
+def metabolism_chart(row: dict) -> dict:
     ages = list(range(18, 91))
-    reference = pd.DataFrame(
+    values = [
         {
-            "年齢": ages,
-            "基礎代謝量": [
-                mifflin_st_jeor_bmr(
-                    age, row["height_cm"], row["weight_kg"], row["sex"]
-                )
-                for age in ages
-            ],
-            "系列": "年齢別の基準代謝量",
+            "年齢": age,
+            "基礎代謝量": mifflin_st_jeor_bmr(
+                age, row["height_cm"], row["weight_kg"], row["sex"]
+            ),
+            "系列": "基準",
+        }
+        for age in ages
+    ]
+    values.append(
+        {
+            "年齢": row["metabolic_age"],
+            "基礎代謝量": row["bmr_kcal"],
+            "系列": "本人",
         }
     )
-    person = pd.DataFrame(
-        {
-            "年齢": [row["metabolic_age"]],
-            "基礎代謝量": [row["bmr_kcal"]],
-            "系列": ["今回の測定値"],
-        }
-    )
-    line = (
-        alt.Chart(reference)
-        .mark_line(color="#4C78A8", strokeWidth=3)
-        .encode(
-            x=alt.X("年齢:Q", scale=alt.Scale(domain=[18, 90]), title="年齢（歳）"),
-            y=alt.Y("基礎代謝量:Q", scale=alt.Scale(zero=False), title="基礎代謝量（kcal/日）"),
-            tooltip=["年齢:Q", alt.Tooltip("基礎代謝量:Q", format=".0f")],
-        )
-    )
-    point = (
-        alt.Chart(person)
-        .mark_point(color="#E45756", filled=True, size=180)
-        .encode(
-            x="年齢:Q",
-            y="基礎代謝量:Q",
-            tooltip=[
-                alt.Tooltip("年齢:Q", title="推定年齢", format=".1f"),
-                alt.Tooltip("基礎代謝量:Q", title="本人の基礎代謝量", format=".0f"),
-            ],
-        )
-    )
-    return (line + point).properties(height=380)
+    position = {
+        "x": {
+            "field": "年齢", "type": "quantitative", "title": "年齢（歳）",
+            "scale": {"domain": [18, 90]},
+        },
+        "y": {
+            "field": "基礎代謝量", "type": "quantitative",
+            "title": "基礎代謝量（kcal/日）", "scale": {"zero": False},
+        },
+    }
+    return {
+        "data": {"values": values},
+        "height": 380,
+        "layer": [
+            {
+                "transform": [{"filter": "datum.系列 === '基準'"}],
+                "mark": {"type": "line", "color": "#4C78A8", "strokeWidth": 3},
+                "encoding": {
+                    **position,
+                    "tooltip": [
+                        {"field": "年齢", "type": "quantitative"},
+                        {"field": "基礎代謝量", "type": "quantitative", "format": ".0f"},
+                    ],
+                },
+            },
+            {
+                "transform": [{"filter": "datum.系列 === '本人'"}],
+                "mark": {"type": "point", "color": "#E45756", "filled": True, "size": 180},
+                "encoding": {
+                    **position,
+                    "tooltip": [
+                        {"field": "年齢", "type": "quantitative", "title": "推定年齢", "format": ".1f"},
+                        {"field": "基礎代謝量", "type": "quantitative", "title": "本人の基礎代謝量", "format": ".0f"},
+                    ],
+                },
+            },
+        ],
+    }
 
 
 def import_csv(uploaded_file) -> tuple[int, list[str]]:
@@ -237,7 +250,7 @@ if pending:
         st.warning("算定値が成人の比較範囲外だったため、18〜90歳の端の値を表示しています。")
 
     st.subheader("代謝量と年齢の関係")
-    st.altair_chart(metabolism_chart(pending), use_container_width=True)
+    st.vega_lite_chart(spec=metabolism_chart(pending), use_container_width=True)
     st.caption(
         "青線は今回入力した性別・身長・体重に対するMifflin–St Jeor式の年齢別基準値、"
         "赤点は体脂肪率から求めた本人の基礎代謝量と参考代謝年齢です。"
