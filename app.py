@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from supabase import Client, create_client
 from postgrest.exceptions import APIError
+from supabase_auth.errors import AuthApiError
 
 from calculations import (
     bmi,
@@ -228,6 +229,11 @@ if "auth_user" not in st.session_state:
                         st.rerun()
                     else:
                         st.success("確認メールを送信しました。メール内のリンクを開いてからログインしてください。")
+                except AuthApiError as exc:
+                    st.error(
+                        "アカウントを作成できませんでした。"
+                        f" エラーコード: {exc.code or exc.status} / メッセージ: {exc.message}"
+                    )
                 except Exception:
                     st.error("アカウントを作成できませんでした。入力内容またはSupabase Authの設定を確認してください。")
     st.info("ログインした利用者ごとにデータを分離して保存します。")
