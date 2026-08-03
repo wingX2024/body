@@ -76,6 +76,7 @@ def save_row(row: dict) -> bool:
     )
     existed = bool(existing.data)
     clean_row = {column: row[column] for column in COLUMNS}
+    clean_row["sex"] = str(clean_row["sex"]).strip()
     client.table(TABLE_NAME).upsert(
         clean_row, on_conflict="measurement_date"
     ).execute()

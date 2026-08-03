@@ -14,6 +14,14 @@ create table if not exists public.body_measurements (
 
 alter table public.body_measurements enable row level security;
 
+-- Recreate the constraint as well when this script is run for an existing
+-- table. CREATE TABLE IF NOT EXISTS alone does not update old constraints.
+alter table public.body_measurements
+  drop constraint if exists body_measurements_sex_check;
+alter table public.body_measurements
+  add constraint body_measurements_sex_check
+  check (btrim(sex) in ('女性', '男性'));
+
 -- No public policies are created. The Streamlit server connects with the
 -- service_role key stored in Secrets and bypasses RLS. Never put that key in
 -- source control or expose it in browser-side code.
