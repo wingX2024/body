@@ -94,23 +94,16 @@ def metabolism_chart(row: dict) -> dict:
         row["height_cm"], row["weight_kg"], row["body_fat_pct"], row["sex"]
     )
     ages = list(range(18, 91))
-    values = [
+    reference_values = [
         {
             "年齢": age,
             "基礎代謝量": mifflin_st_jeor_bmr(
                 age, row["height_cm"], row["weight_kg"], row["sex"]
             ),
-            "系列": "基準",
         }
         for age in ages
     ]
-    values.append(
-        {
-            "年齢": point_age,
-            "基礎代謝量": point_bmr,
-            "系列": "本人",
-        }
-    )
+    person_value = [{"年齢": point_age, "基礎代謝量": point_bmr}]
     position = {
         "x": {
             "field": "年齢", "type": "quantitative", "title": "年齢（歳）",
@@ -122,11 +115,10 @@ def metabolism_chart(row: dict) -> dict:
         },
     }
     return {
-        "data": {"values": values},
         "height": 380,
         "layer": [
             {
-                "transform": [{"filter": "datum.系列 === '基準'"}],
+                "data": {"values": reference_values},
                 "mark": {"type": "line", "color": "#4C78A8", "strokeWidth": 3},
                 "encoding": {
                     **position,
@@ -137,7 +129,7 @@ def metabolism_chart(row: dict) -> dict:
                 },
             },
             {
-                "transform": [{"filter": "datum.系列 === '本人'"}],
+                "data": {"values": person_value},
                 "mark": {"type": "point", "color": "#E45756", "filled": True, "size": 180},
                 "encoding": {
                     **position,
@@ -343,9 +335,16 @@ if pending:
         use_container_width=True,
         key=chart_key,
     )
+    reference_at_18 = mifflin_st_jeor_bmr(
+        18, pending["height_cm"], pending["weight_kg"], pending["sex"]
+    )
+    reference_at_90 = mifflin_st_jeor_bmr(
+        90, pending["height_cm"], pending["weight_kg"], pending["sex"]
+    )
     st.caption(
         "青線は今回入力した性別・身長・体重に対するMifflin–St Jeor式の年齢別基準値、"
         "赤点は体脂肪率から求めた本人の基礎代謝量と参考代謝年齢です。"
+        f" 基準線の端点: 18歳 {reference_at_18:,.0f} kcal / 90歳 {reference_at_90:,.0f} kcal。"
     )
 
     if not st.session_state.get("pending_saved") and st.button(
