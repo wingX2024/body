@@ -1,0 +1,533 @@
+---
+title: "体組成トラッカー 設計仕様書"
+subtitle: "Streamlit Community Cloud × Supabase"
+author: "Body Composition Tracker Project"
+date: "2026-08-03"
+lang: ja
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    mermaid:
+      theme: neutral
+execute:
+  echo: false
+  warning: false
+---
+
+::: {.content-visible when-format="html"}
+[MS Wordをダウンロード](design-spec.docx){.btn .btn-primary role="button"}
+[PDFをダウンロード](design-spec.pdf){.btn .btn-danger role="button"}
+:::
+
+# 文書概要
+
+## 目的
+
+本書は、体組成トラッカーWebアプリの機能、計算方法、画面、データ、認証、セキュリティ、運用およびテスト方針を定義する。開発・保守・利用者説明・障害調査で共通の判断基準として使用する。
+
+## 対象システム
+
+利用者が日々の身長、体重、体脂肪率、内臓脂肪、骨量を入力し、次の情報を確認・保存するWebアプリである。
+
+- 推定基礎代謝量
+- 参考代謝年齢
+- BMI
+- 除脂肪量
+- 代謝量と年齢の関係
+- 測定値と算定値の経時変化
+
+::: {.callout-important title="医学的な位置づけ"}
+本アプリの算定値は健康管理上の参考値であり、医療上の診断、治療方針、メーカー独自の「体年齢」を再現するものではない。
+:::
+
+## システムのイメージ
+
+```{mermaid}
+flowchart LR
+    U["👤 利用者"] -->|メール・パスワード| A["🔐 Supabase Auth"]
+    U -->|体組成を入力| S["⚖️ Streamlitアプリ"]
+    S -->|計算| C["🧮 計算ロジック"]
+    C -->|代謝・年齢・BMI| S
+    S -->|本人JWT付き通信| D[("🗄️ Supabase PostgreSQL")]
+    A -->|ユーザーID / JWT| S
+    D -->|RLSで本人の行だけ| S
+    S -->|グラフ・履歴| U
+```
+
+# システム構成
+
+## アーキテクチャ
+
+```{mermaid}
+flowchart TB
+    subgraph Client["利用者端末"]
+        B["Webブラウザ"]
+    end
+
+    subgraph Cloud["Streamlit Community Cloud"]
+        APP["app.py\nUI・認証制御・データアクセス"]
+        CALC["calculations.py\n純粋な計算ロジック"]
+        SECRET["App Secrets\nSUPABASE_URL\nSUPABASE_KEY"]
+    end
+
+    subgraph Supabase["Supabase"]
+        AUTH["Auth\nメール・パスワード認証"]
+        API["PostgREST Data API"]
+        DB[("PostgreSQL\nbody_measurements_private")]
+        RLS["Row Level Security\nauth.uid() = user_id"]
+    end
+
+    B <-->|HTTPS| APP
+    APP --> CALC
+    SECRET -.起動時に読込.-> APP
+    APP <-->|認証| AUTH
+    APP -->|Publishable key + JWT| API
+    API --> RLS
+    RLS --> DB
+```
+
+## 技術要素
+
+| 区分 | 採用技術 | 役割 |
+|---|---|---|
+| UI・アプリサーバー | Streamlit | 入力、認証画面、結果、グラフ、CSV管理 |
+| 言語 | Python | アプリケーションと計算ロジック |
+| 表形式処理 | pandas | CSV、履歴データ、日付正規化 |
+| グラフ | Streamlit Vega-Lite | 代謝曲線と本人点、経時変化 |
+| 認証 | Supabase Auth | メール・パスワード認証、JWT発行 |
+| 永続化 | Supabase PostgreSQL | 利用者別の測定データ保存 |
+| API | Supabase Python / PostgREST | 認証済みCRUD |
+| 認可 | PostgreSQL RLS | 利用者間の行レベル分離 |
+| 配信 | Streamlit Community Cloud | GitHub連携デプロイ |
+
+## ソース構成
+
+```text
+body/
+├── app.py                         # UI、認証、Supabase、グラフ
+├── calculations.py                # 計算式、入力検証
+├── supabase_schema.sql            # テーブル、権限、RLS
+├── requirements.txt               # Python依存関係
+├── test_calculations.py            # 計算単体テスト
+├── .streamlit/
+│   └── secrets.toml.example       # 接続設定例（実値は含めない）
+└── docs/
+    └── design-spec.qmd             # 本設計仕様書
+```
+
+# 利用者とユースケース
+
+## アクター
+
+| アクター | 説明 |
+|---|---|
+| 未認証利用者 | ログインまたは新規アカウント作成のみ可能 |
+| 認証済み利用者 | 本人の計算、登録、履歴閲覧、CSV入出力が可能 |
+| 運用管理者 | Streamlit Cloud、Supabase、GitHubを管理 |
+
+## 主なユースケース
+
+```{mermaid}
+flowchart LR
+    U(("利用者"))
+    U --> UC1["アカウント作成"]
+    U --> UC2["ログイン／ログアウト"]
+    U --> UC3["測定値を計算"]
+    U --> UC4["結果を確認して登録"]
+    U --> UC5["同日データを更新"]
+    U --> UC6["経時変化を閲覧"]
+    U --> UC7["CSVバックアップ"]
+    U --> UC8["CSV復元"]
+```
+
+# 認証・認可設計
+
+## 認証シーケンス
+
+```{mermaid}
+sequenceDiagram
+    autonumber
+    actor User as 利用者
+    participant App as Streamlit
+    participant Auth as Supabase Auth
+    participant DB as PostgreSQL + RLS
+
+    User->>App: メール・パスワード入力
+    App->>Auth: sign_in_with_password()
+    Auth-->>App: User + JWT
+    App->>App: Client/Userをsession_stateへ保持
+    App->>DB: SELECT（Publishable key + JWT）
+    DB->>DB: auth.uid() = user_id を評価
+    DB-->>App: 本人の行のみ返却
+    App-->>User: 入力・履歴画面を表示
+```
+
+## 新規登録
+
+1. メールアドレスと8文字以上のパスワードを入力する。
+2. `sign_up()`を実行する。
+3. Confirm Emailが有効なら、確認メール送信後にログインを待つ。
+4. Confirm Emailが無効なら、登録時セッションで直ちにログインする。
+5. Supabase標準メールは送信上限の影響を受ける。`over_email_send_rate_limit`は日本語案内へ変換する。
+
+## 利用者分離
+
+```{mermaid}
+flowchart TB
+    UA["利用者A\nuser_id = AAA"] --> PA["RLS条件\nauth.uid() = AAA"]
+    UB["利用者B\nuser_id = BBB"] --> PB["RLS条件\nauth.uid() = BBB"]
+    PA --> RA["AAAの測定行だけ"]
+    PB --> RB["BBBの測定行だけ"]
+    PA -.拒否.-> RB
+    PB -.拒否.-> RA
+```
+
+アプリでも`user_id`を条件に含めるが、最終的なアクセス制御はデータベースのRLSで強制する。`anon`にはテーブル権限を付与しない。`authenticated`にはCRUD権限を付与し、各操作のRLSポリシーで本人行だけを許可する。
+
+## キー管理
+
+- 使用可能: `sb_publishable_`で始まるPublishable key
+- 使用禁止: `sb_secret_`、旧`service_role`
+- 接続値はStreamlit Secretsへ設定し、GitHubへコミットしない。
+- アプリはPublishable key以外が設定されている場合に起動を停止する。
+
+# 機能設計
+
+## 画面ワイヤーフレーム
+
+```{mermaid}
+flowchart TB
+    subgraph Main["メイン領域"]
+        H["⚖️ 体組成トラッカー"]
+        F["測定日｜性別｜身長\n体重｜体脂肪率｜内臓脂肪｜骨量"]
+        BTN["［計算する］"]
+        M["基礎代謝｜代謝年齢｜BMI｜除脂肪量"]
+        G1["年齢別基準代謝曲線＋本人点"]
+        REG["［この計算結果を登録する］"]
+        G2["経時変化グラフ"]
+        LIST["記録一覧"]
+        H --> F --> BTN --> M --> G1 --> REG --> G2 --> LIST
+    end
+    subgraph Side["サイドバー"]
+        ID["ログイン中メール"]
+        OUT["ログアウト"]
+        IMP["CSV取込"]
+        EXP["CSV保存"]
+        ID --> OUT --> IMP --> EXP
+    end
+```
+
+## 計算と登録の二段階処理
+
+```{mermaid}
+stateDiagram-v2
+    [*] --> 入力中
+    入力中 --> 入力エラー: 計算する／範囲外
+    入力エラー --> 入力中: 修正
+    入力中 --> 計算済み未登録: 計算する／妥当
+    計算済み未登録 --> 入力中: 入力変更後に再計算
+    計算済み未登録 --> 登録済み: この計算結果を登録する
+    登録済み --> 登録済み: 同日ならupsertで更新
+    登録済み --> 入力中: 次の測定
+```
+
+計算時点ではDBを変更しない。計算結果は`st.session_state["pending_measurement"]`へ保持する。利用者が結果を確認し、登録ボタンを押した時だけSupabaseへupsertする。
+
+## 同日データの扱い
+
+主キーを`(user_id, measurement_date)`とする。同一利用者・同一測定日は1行だけ保持し、再登録時は更新する。別利用者の同じ日付は別行として保存できる。
+
+## CSV
+
+- エクスポート文字コード: UTF-8 BOM付き
+- ファイル名: `body_composition.csv`
+- `user_id`はCSVへ含めない。
+- インポート時はログイン中の`user_id`を自動付与する。
+- 日付をISO形式へ正規化し、入力検証後に行単位でupsertする。
+- エラーは先頭5件を表示し、残数を通知する。
+
+# 計算仕様
+
+## 計算フロー
+
+```{mermaid}
+flowchart LR
+    W["体重 W"] --> LBM["除脂肪量\nLBM = W × (1 - 体脂肪率/100)"]
+    BF["体脂肪率 BF"] --> LBM
+    LBM --> BMR["Katch–McArdle\nBMR = 370 + 21.6 × LBM"]
+
+    H["身長 H"] --> REF["Mifflin–St Jeor基準線"]
+    W --> REF
+    S["性別定数 S"] --> REF
+    A["年齢 A = 18～90"] --> REF
+
+    BMR --> AGE["BMRと基準線が等しくなる年齢を逆算"]
+    REF --> AGE
+    AGE --> POINT["🔴 本人点\n(参考代謝年齢, BMR)"]
+```
+
+## 除脂肪量
+
+$$
+LBM = W \times \left(1 - \frac{BF}{100}\right)
+$$
+
+$W$は体重kg、$BF$は体脂肪率%とする。
+
+## 推定基礎代謝量
+
+Katch–McArdle式を使用する。
+
+$$
+BMR_{Katch} = 370 + 21.6 \times LBM
+$$
+
+単位はkcal/日。
+
+## 年齢別基準代謝量
+
+Mifflin–St Jeor式を使用する。
+
+$$
+BMR_{MSJ} = 10W + 6.25H - 5A + S
+$$
+
+| 性別 | $S$ |
+|---|---:|
+| 男性 | $+5$ |
+| 女性 | $-161$ |
+
+$H$は身長cm、$A$は年齢歳。
+
+## 参考代謝年齢
+
+$BMR_{MSJ}=BMR_{Katch}$となる年齢を逆算する。
+
+$$
+A_{metabolic} = \frac{10W + 6.25H + S - BMR_{Katch}}{5}
+$$
+
+表示範囲は成人比較範囲の18～90歳とし、範囲外は端値へ丸めて警告する。
+
+## BMI
+
+$$
+BMI = \frac{W}{(H/100)^2}
+$$
+
+## グラフ整合性
+
+- 青線は18～90歳の`BMR_MSJ`を1歳刻みで描く。
+- 赤点は保存済み派生値を流用せず、入力値からBMRと参考代謝年齢を再計算する。
+- 青線用データと赤点用データを独立したVega-Liteレイヤーへ渡す。
+- グラフキーには性別・身長・体重・体脂肪率を含め、条件変更時に再描画する。
+- 表示直前にも派生値を再計算し、古いセッション値との不一致を防ぐ。
+
+## 内臓脂肪・骨量
+
+これらは記録・入力検証・経時比較に使用する。一般公開された妥当な補正式がないため、基礎代謝量および参考代謝年齢へ直接加算しない。
+
+# 入力仕様
+
+| 項目 | 型 | 画面範囲 | 初期値 | 保存形式 |
+|---|---|---:|---:|---|
+| 測定日 | date | 任意日 | 当日 | ISO date |
+| 性別 | enum | 女性／男性 | 女性 | `female`／`male` |
+| 身長 | float | 100～230 cm | 165.0 | double precision |
+| 体重 | float | 25～300 kg | 60.0 | double precision |
+| 体脂肪率 | float | 2～70% | 25.0 | double precision |
+| 内臓脂肪 | float | 0～60 | 8.0 | double precision |
+| 骨量 | float | 0.5～10 kg | 2.5 | double precision |
+
+追加整合性条件として、骨量は除脂肪量より小さいことを要求する。
+
+# データ設計
+
+## ER図
+
+```{mermaid}
+erDiagram
+    AUTH_USERS ||--o{ BODY_MEASUREMENTS_PRIVATE : owns
+    AUTH_USERS {
+        uuid id PK
+        text email
+    }
+    BODY_MEASUREMENTS_PRIVATE {
+        uuid user_id PK,FK
+        date measurement_date PK
+        text sex
+        double height_cm
+        double weight_kg
+        double body_fat_pct
+        double visceral_fat_pct
+        double bone_mass_kg
+        double bmr_kcal
+        double metabolic_age
+        timestamptz updated_at
+    }
+```
+
+## テーブル制約
+
+| 制約 | 内容 |
+|---|---|
+| 主キー | `(user_id, measurement_date)` |
+| 外部キー | `user_id → auth.users(id) ON DELETE CASCADE` |
+| 性別 | `female`または`male` |
+| 数値範囲 | UIと同等のCHECK制約 |
+| 代謝年齢 | 18～90 |
+| NULL | 全測定列をNOT NULL |
+
+## 旧共有テーブル
+
+旧`body_measurements`はデータ消失防止のため削除しない。RLSを有効化し、`anon`および`authenticated`から全権限を取り消す。現行アプリは参照しない。
+
+# エラー処理
+
+| 事象 | 挙動 |
+|---|---|
+| Secrets未設定 | 設定例を表示して`st.stop()` |
+| Publishable key以外 | セキュリティエラーとして起動停止 |
+| 未ログイン | ログイン／新規登録画面のみ表示 |
+| ログイン失敗 | 資格情報・確認状況の確認を案内 |
+| メール送信上限 | 約1時間待機または独自SMTP設定を案内 |
+| 個人テーブル未作成 | 最新SQLの実行を案内して停止 |
+| 入力範囲外 | 項目別エラーを表示し計算しない |
+| RLS拒否（42501） | SQLと再ログインを案内 |
+| その他PostgRESTエラー | 安全なコードとメッセージを表示 |
+| 通信例外 | 再試行を案内し、未登録状態を維持 |
+
+# セキュリティ設計
+
+## 防御レイヤー
+
+```{mermaid}
+flowchart TB
+    L1["Layer 1: Streamlit Share\n公開範囲の制御（任意）"] -->
+    L2["Layer 2: Supabase Auth\n利用者の本人確認"] -->
+    L3["Layer 3: JWT\nリクエスト主体の証明"] -->
+    L4["Layer 4: PostgreSQL RLS\n本人行以外を拒否"] -->
+    L5["Layer 5: 複合主キー・CHECK\n重複と不正値を拒否"]
+```
+
+## セキュリティ要件
+
+- パスワードをアプリDBやログへ保存しない。
+- Supabase Authへ認証を委譲する。
+- エラー表示へキー、JWT、パスワードを含めない。
+- `user_id`は認証結果から取得し、入力欄を設けない。
+- RLSはSELECT/INSERT/UPDATE/DELETEを個別定義する。
+- Streamlitセッション終了後の再訪時は再ログインを要求し得る。
+- 本番運用では独自SMTP、適切なSite URL、Redirect URLsを設定する。
+
+# 非機能要件
+
+| 項目 | 要件 |
+|---|---|
+| 可用性 | Streamlit CloudおよびSupabaseのサービス提供範囲に従う |
+| 永続性 | 測定データはSupabase PostgreSQLへ保存 |
+| 秘密管理 | Streamlit Secretsを利用 |
+| プライバシー | RLSにより利用者単位で分離 |
+| 保守性 | 計算ロジックを`calculations.py`へ分離 |
+| 可搬性 | GitHubからStreamlit Community Cloudへ再デプロイ可能 |
+| バックアップ | 利用者単位のCSVダウンロードを提供 |
+| 文字コード | UIは日本語、DBの性別コードはASCII |
+
+# テスト設計
+
+## 自動テスト
+
+`test_calculations.py`で次を確認する。
+
+1. 除脂肪量とKatch–McArdle式
+2. BMI
+3. 参考代謝年齢の18～90歳丸め
+4. Mifflin–St Jeor式が10年で50 kcal低下すること
+5. 女性デフォルト値の赤点が基準線と一致すること
+6. 男性デフォルト値の赤点が基準線と一致すること
+7. 入力検証
+
+## 受入テスト
+
+| ID | シナリオ | 期待結果 |
+|---|---|---|
+| AT-01 | 未ログインで開く | 測定履歴を表示せず認証画面を表示 |
+| AT-02 | 利用者Aで登録 | Aの行として保存 |
+| AT-03 | 利用者Bでログイン | Aのデータが表示されない |
+| AT-04 | 同日を再登録 | 行追加ではなく更新 |
+| AT-05 | 女性・初期値で計算 | BMR 1,342、年齢約25.7、赤点一致 |
+| AT-06 | 男性・初期値で計算 | BMR 1,342、年齢約58.9、赤点一致 |
+| AT-07 | CSV出力 | 本人データのみ、user_idなし |
+| AT-08 | CSV取込 | ログイン本人のuser_idで保存 |
+| AT-09 | 別user_idのAPI参照 | RLSにより0行または拒否 |
+| AT-10 | メール送信上限 | 日本語の待機／SMTP案内 |
+
+# デプロイ・運用
+
+## Streamlit Secrets
+
+```toml
+SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
+SUPABASE_KEY = "sb_publishable_YOUR_KEY"
+```
+
+## Supabase設定
+
+1. `supabase_schema.sql`をSQL Editorで実行する。
+2. AuthenticationのEmail providerを有効化する。
+3. Site URLをStreamlit公開URLへ設定する。
+4. Redirect URLsへStreamlit公開URLを追加する。
+5. 複数利用者運用では独自SMTPを設定する。
+
+## リリースフロー
+
+```{mermaid}
+flowchart LR
+    DEV["ローカル修正"] --> TEST["py_compile / unittest"]
+    TEST --> COMMIT["git commit"]
+    COMMIT --> PUSH["GitHubへpush"]
+    PUSH --> DEPLOY["Streamlit Cloud自動再デプロイ"]
+    DEPLOY --> SMOKE["ログイン・計算・登録の確認"]
+```
+
+## Quartoでの出力
+
+HTML:
+
+```bash
+quarto render docs/design-spec.qmd --to html
+```
+
+Word:
+
+```bash
+quarto render docs/design-spec.qmd --to docx
+```
+
+PDF（Quarto同梱のTypstを使用）:
+
+```bash
+quarto render docs/design-spec.qmd --to typst
+```
+
+HTML内のMS Word/PDFリンクを有効にするには、3形式を同じ`docs`フォルダへ生成する。
+
+# 既知の制約と今後の改善
+
+- 代謝年齢は2つの推定式を組み合わせた参考値であり、人口統計上の年齢分布ではない。
+- 内臓脂肪の単位は測定機器によって異なる。
+- Streamlitのセッションをまたぐ認証永続化は限定的で、再ログインが必要になる場合がある。
+- Supabase標準メールは送信レート制限が厳しいため、複数人運用には独自SMTPが必要である。
+- パスワードリセットUI、アカウント削除UI、MFAは未実装である。
+- `updated_at`を更新時にも自動変更するDBトリガーは未実装である。
+- 医療データとして運用する場合は、法令、同意、監査ログ、保持期間、削除要求への追加対応が必要である。
+
+# 変更管理
+
+| 版 | 日付 | 内容 |
+|---|---|---|
+| 1.0 | 2026-08-03 | 現行実装を基に初版作成 |
