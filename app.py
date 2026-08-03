@@ -319,7 +319,9 @@ if pending:
     st.session_state["pending_clamped"] = pending_clamped
     st.subheader("計算結果")
     saved_label = "登録済み" if st.session_state.get("pending_saved") else "まだ登録されていません"
-    st.caption(f"測定日: {pending['measurement_date']}　※{saved_label}")
+    st.caption(
+        f"測定日: {pending['measurement_date']}　性別: {pending['sex']}　※{saved_label}"
+    )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("推定基礎代謝", f"{pending['bmr_kcal']:,.0f} kcal/日")
     m2.metric("参考・代謝年齢", f"{pending['metabolic_age']:.1f} 歳")
@@ -332,7 +334,15 @@ if pending:
         st.warning("算定値が成人の比較範囲外だったため、18〜90歳の端の値を表示しています。")
 
     st.subheader("代謝量と年齢の関係")
-    st.vega_lite_chart(spec=metabolism_chart(pending), use_container_width=True)
+    chart_key = (
+        f"metabolism_{pending['sex']}_{pending['height_cm']}_"
+        f"{pending['weight_kg']}_{pending['body_fat_pct']}"
+    )
+    st.vega_lite_chart(
+        spec=metabolism_chart(pending),
+        use_container_width=True,
+        key=chart_key,
+    )
     st.caption(
         "青線は今回入力した性別・身長・体重に対するMifflin–St Jeor式の年齢別基準値、"
         "赤点は体脂肪率から求めた本人の基礎代謝量と参考代謝年齢です。"
