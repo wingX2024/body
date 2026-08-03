@@ -18,7 +18,16 @@ execute:
   warning: false
 ---
 
-::: {.content-visible when-format="html"}
+```{=html}
+<style>
+@media print {
+  .download-links { display: none !important; }
+  .cell-output-display, .mermaid { break-inside: avoid; }
+}
+</style>
+```
+
+::: {.download-links .content-visible when-format="html"}
 [MS Wordをダウンロード](design-spec.docx){.btn .btn-primary role="button"}
 [PDFをダウンロード](design-spec.pdf){.btn .btn-danger role="button"}
 :::
@@ -508,13 +517,14 @@ Word:
 quarto render docs/design-spec.qmd --to docx
 ```
 
-PDF（Quarto同梱のTypstを使用）:
+PDF:
 
-```bash
-quarto render docs/design-spec.qmd --to typst
-```
+1. HTML版をChromeで開く。
+2. `Ctrl+P`で印刷画面を開く。
+3. 送信先を「PDFに保存」にする。
+4. 用紙をA4、背景のグラフィックを有効にして保存する。
 
-HTML内のMS Word/PDFリンクを有効にするには、3形式を同じ`docs`フォルダへ生成する。
+Typstによる直接PDF化は、横長のMermaid図と日本語の再組版で崩れる場合があるため使用しない。HTML、Word、PDFを同じ`docs`フォルダへ配置すると、HTML内のダウンロードリンクが有効になる。
 
 # 既知の制約と今後の改善
 

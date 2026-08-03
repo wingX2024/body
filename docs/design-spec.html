@@ -225,6 +225,12 @@ window.Quarto = {
 </header>
 
 
+<style>
+@media print {
+  .download-links { display: none !important; }
+  .cell-output-display, .mermaid { break-inside: avoid; }
+}
+</style>
 <p><a href="design-spec.docx" class="btn btn-primary" role="button">MS Wordをダウンロード</a> <a href="design-spec.pdf" class="btn btn-danger" role="button">PDFをダウンロード</a></p>
 <section id="文書概要" class="level1" data-number="1">
 <h1 data-number="1"><span class="header-section-number">1</span> 文書概要</h1>
@@ -1098,9 +1104,14 @@ BMI = \frac{W}{(H/100)^2}
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render docs/design-spec.qmd <span class="at">--to</span> html</span></code></pre></div><button title="コピー" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Word:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render docs/design-spec.qmd <span class="at">--to</span> docx</span></code></pre></div><button title="コピー" class="code-copy-button"><i class="bi"></i></button></div>
-<p>PDF（Quarto同梱のTypstを使用）:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">quarto</span> render docs/design-spec.qmd <span class="at">--to</span> typst</span></code></pre></div><button title="コピー" class="code-copy-button"><i class="bi"></i></button></div>
-<p>HTML内のMS Word/PDFリンクを有効にするには、3形式を同じ<code>docs</code>フォルダへ生成する。</p>
+<p>PDF:</p>
+<ol type="1">
+<li>HTML版をChromeで開く。</li>
+<li><code>Ctrl+P</code>で印刷画面を開く。</li>
+<li>送信先を「PDFに保存」にする。</li>
+<li>用紙をA4、背景のグラフィックを有効にして保存する。</li>
+</ol>
+<p>Typstによる直接PDF化は、横長のMermaid図と日本語の再組版で崩れる場合があるため使用しない。HTML、Word、PDFを同じ<code>docs</code>フォルダへ配置すると、HTML内のダウンロードリンクが有効になる。</p>
 </section>
 </section>
 <section id="既知の制約と今後の改善" class="level1" data-number="14">

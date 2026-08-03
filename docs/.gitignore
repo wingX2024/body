@@ -1,2 +1,4 @@
 /.quarto/
 **/*.quarto_ipynb
+/design-spec-browser*.pdf
+/design-spec-typst.pdf
