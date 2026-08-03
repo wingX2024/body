@@ -57,6 +57,7 @@ def load_data(user_id: str) -> pd.DataFrame:
     )
     data = pd.DataFrame(response.data, columns=COLUMNS)
     if not data.empty:
+        data["sex"] = data["sex"].replace({"female": "女性", "male": "男性"})
         # Older/imported data may use different date notations. Normalize these
         # before displaying so one calendar day is always shown only once.
         data["measurement_date"] = pd.to_datetime(
@@ -81,7 +82,10 @@ def save_row(row: dict, user_id: str) -> bool:
     existed = bool(existing.data)
     clean_row = {column: row[column] for column in COLUMNS}
     clean_row["user_id"] = user_id
-    clean_row["sex"] = str(clean_row["sex"]).strip()
+    sex_for_storage = {"女性": "female", "男性": "male"}
+    clean_row["sex"] = sex_for_storage.get(
+        str(clean_row["sex"]).strip(), str(clean_row["sex"]).strip().lower()
+    )
     client.table(TABLE_NAME).upsert(
         clean_row, on_conflict="user_id,measurement_date"
     ).execute()
