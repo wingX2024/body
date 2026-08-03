@@ -21,17 +21,19 @@ streamlit run app.py
 
 1. Supabaseでプロジェクトを作成します。
 2. DashboardのSQL Editorで `supabase_schema.sql` を実行します。
-3. Project Settings > APIでProject URLと `service_role` keyを確認します。
+3. Project Settings > API KeysでProject URLと `sb_publishable_` から始まるPublishable keyを確認します。
 4. Streamlit Community CloudのApp settings > Secretsに次を登録します。
 
 ```toml
 SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
-SUPABASE_KEY = "YOUR_SERVICE_ROLE_KEY"
+SUPABASE_KEY = "YOUR_PUBLISHABLE_KEY"
 ```
 
-ローカル実行時は `.streamlit/secrets.toml.example` を `.streamlit/secrets.toml` としてコピーし、値を設定してください。`service_role` keyは秘密情報です。GitHubへコミットしないでください。RLSは有効化され、公開ポリシーは作成しない構成です。公開URLを他人も利用できる状態にすると、その人もアプリ経由でデータを操作できるため、個人利用ではStreamlitアプリをPrivateにしてください。
+ローカル実行時は `.streamlit/secrets.toml.example` を `.streamlit/secrets.toml` としてコピーし、値を設定してください。アプリではメールアドレスとパスワードによるSupabase Authログインが必須です。各行にユーザーIDを保存し、RLSによって本人の行だけを読み書きできます。Secret keyや旧service_role keyは使用しません。
 
-既存のSQLiteデータは、旧アプリでダウンロードしたCSVをサイドバーから取り込むことで移行できます。
+Supabase DashboardのAuthentication > ProvidersでEmailを有効にしてください。メール確認を有効にしている場合、新規登録後に確認メール内のリンクを開いてからログインします。
+
+既存データは、ログイン後にバックアップCSVをサイドバーから取り込むことで、そのログイン利用者のデータとして移行できます。以前の共有テーブル `body_measurements` は削除せずアクセスだけを閉じ、新しい `body_measurements_private` テーブルを使用します。
 
 ## 算定について
 

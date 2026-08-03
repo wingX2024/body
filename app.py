@@ -17,7 +17,7 @@ from calculations import (
 )
 
 
-TABLE_NAME = "body_measurements"
+TABLE_NAME = "body_measurements_private"
 COLUMNS = [
     "measurement_date", "sex", "height_cm", "weight_kg", "body_fat_pct",
     "visceral_fat_pct", "bone_mass_kg", "bmr_kcal", "metabolic_age",
@@ -28,8 +28,9 @@ class SupabaseConfigurationError(RuntimeError):
     pass
 
 
-@st.cache_resource
 def supabase_client() -> Client:
+    if "supabase_client" in st.session_state:
+        return st.session_state["supabase_client"]
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
@@ -37,18 +38,20 @@ def supabase_client() -> Client:
         raise SupabaseConfigurationError(
             "SUPABASE_URL または SUPABASE_KEY が設定されていません。"
         ) from exc
-    if str(key).startswith("sb_publishable_"):
+    if not str(key).startswith("sb_publishable_"):
         raise SupabaseConfigurationError(
-            "SUPABASE_KEYにPublishable keyが設定されています。書き込み可能なsb_secret_から始まるSecret keyへ変更してください。"
+            "個人データ保護のため、SUPABASE_KEYにはsb_publishable_から始まるPublishable keyを設定してください。"
         )
-    return create_client(url, key)
+    st.session_state["supabase_client"] = create_client(url, key)
+    return st.session_state["supabase_client"]
 
 
-def load_data() -> pd.DataFrame:
+def load_data(user_id: str) -> pd.DataFrame:
     response = (
         supabase_client()
         .table(TABLE_NAME)
         .select(",".join(COLUMNS))
+        .eq("user_id", user_id)
         .order("measurement_date")
         .execute()
     )
@@ -64,21 +67,23 @@ def load_data() -> pd.DataFrame:
     return data
 
 
-def save_row(row: dict) -> bool:
+def save_row(row: dict, user_id: str) -> bool:
     """Store exactly one record per date and return whether it was replaced."""
     client = supabase_client()
     existing = (
         client.table(TABLE_NAME)
         .select("measurement_date")
+        .eq("user_id", user_id)
         .eq("measurement_date", row["measurement_date"])
         .limit(1)
         .execute()
     )
     existed = bool(existing.data)
     clean_row = {column: row[column] for column in COLUMNS}
+    clean_row["user_id"] = user_id
     clean_row["sex"] = str(clean_row["sex"]).strip()
     client.table(TABLE_NAME).upsert(
-        clean_row, on_conflict="measurement_date"
+        clean_row, on_conflict="user_id,measurement_date"
     ).execute()
     return existed
 
@@ -142,7 +147,7 @@ def metabolism_chart(row: dict) -> dict:
     }
 
 
-def import_csv(uploaded_file) -> tuple[int, list[str]]:
+def import_csv(uploaded_file, user_id: str) -> tuple[int, list[str]]:
     incoming = pd.read_csv(uploaded_file)
     missing = [c for c in COLUMNS if c not in incoming.columns]
     if missing:
@@ -161,7 +166,7 @@ def import_csv(uploaded_file) -> tuple[int, list[str]]:
             )
             if validation:
                 raise ValueError(" ".join(validation))
-            save_row(values)
+            save_row(values, user_id)
             saved += 1
         except (ValueError, TypeError, KeyError) as exc:
             errors.append(f"{index + 2}行目: {exc}")
@@ -175,32 +180,88 @@ if flash_message := st.session_state.pop("flash_message", None):
     st.success(flash_message)
 
 try:
-    supabase_client().table(TABLE_NAME).select("measurement_date").limit(1).execute()
+    client = supabase_client()
 except SupabaseConfigurationError as exc:
     st.error(str(exc))
     st.code(
         'SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"\n'
-        'SUPABASE_KEY = "YOUR_SERVICE_ROLE_KEY"',
+        'SUPABASE_KEY = "YOUR_PUBLISHABLE_KEY"',
         language="toml",
     )
     st.info("ローカルでは .streamlit/secrets.toml、Streamlit CloudではApp settingsのSecretsに設定してください。")
     st.stop()
+
+if "auth_user" not in st.session_state:
+    st.subheader("ログイン")
+    login_tab, signup_tab = st.tabs(["ログイン", "新規アカウント作成"])
+    with login_tab:
+        with st.form("login_form"):
+            login_email = st.text_input("メールアドレス", key="login_email")
+            login_password = st.text_input("パスワード", type="password", key="login_password")
+            login_clicked = st.form_submit_button("ログイン", type="primary", use_container_width=True)
+        if login_clicked:
+            try:
+                response = client.auth.sign_in_with_password(
+                    {"email": login_email.strip(), "password": login_password}
+                )
+                st.session_state["auth_user"] = response.user
+                st.rerun()
+            except Exception:
+                st.error("ログインできませんでした。メールアドレス、パスワード、メール確認状況を確認してください。")
+    with signup_tab:
+        with st.form("signup_form"):
+            signup_email = st.text_input("メールアドレス", key="signup_email")
+            signup_password = st.text_input(
+                "パスワード（8文字以上）", type="password", key="signup_password"
+            )
+            signup_clicked = st.form_submit_button("アカウントを作成", use_container_width=True)
+        if signup_clicked:
+            if len(signup_password) < 8:
+                st.error("パスワードは8文字以上にしてください。")
+            else:
+                try:
+                    response = client.auth.sign_up(
+                        {"email": signup_email.strip(), "password": signup_password}
+                    )
+                    if response.session and response.user:
+                        st.session_state["auth_user"] = response.user
+                        st.rerun()
+                    else:
+                        st.success("確認メールを送信しました。メール内のリンクを開いてからログインしてください。")
+                except Exception:
+                    st.error("アカウントを作成できませんでした。入力内容またはSupabase Authの設定を確認してください。")
+    st.info("ログインした利用者ごとにデータを分離して保存します。")
+    st.stop()
+
+auth_user = st.session_state["auth_user"]
+user_id = str(auth_user.id)
+
+try:
+    client.table(TABLE_NAME).select("measurement_date").limit(1).execute()
 except Exception:
-    st.error("Supabaseに接続できないか、body_measurementsテーブルがありません。supabase_schema.sqlを実行してください。")
+    st.error("個人用テーブルに接続できません。Supabase SQL Editorで最新のsupabase_schema.sqlを実行してください。")
     st.stop()
 
 with st.sidebar:
+    st.caption(f"ログイン中: {auth_user.email}")
+    if st.button("ログアウト", use_container_width=True):
+        try:
+            client.auth.sign_out()
+        finally:
+            for key in ["auth_user", "supabase_client", "pending_measurement", "pending_saved"]:
+                st.session_state.pop(key, None)
+            st.rerun()
     st.header("データ管理")
     uploaded = st.file_uploader("バックアップCSVを読み込む", type="csv")
     if uploaded and st.button("CSVを取り込む", use_container_width=True):
-        count, import_errors = import_csv(uploaded)
+        count, import_errors = import_csv(uploaded, user_id)
         if count:
             st.success(f"{count}件を取り込みました。")
         for error in import_errors[:5]:
             st.error(error)
         if len(import_errors) > 5:
             st.error(f"ほか{len(import_errors) - 5}件のエラーがあります。")
-    current = load_data()
+    current = load_data(user_id)
     if not current.empty:
         st.download_button(
             "CSVをダウンロード", current.to_csv(index=False).encode("utf-8-sig"),
@@ -266,12 +327,12 @@ if pending:
         "この計算結果を登録する", type="primary", use_container_width=True
     ):
         try:
-            replaced = save_row(pending)
+            replaced = save_row(pending, user_id)
         except APIError as exc:
             if getattr(exc, "code", None) == "42501":
                 st.error(
-                    "Supabaseの書き込み権限がありません。Streamlit SecretsのSUPABASE_KEYを、"
-                    "SupabaseのSecret key（sb_secret_で始まる値）へ変更してください。"
+                    "本人データへの書き込みがRLSに拒否されました。最新のsupabase_schema.sqlを実行し、"
+                    "再ログインしてください。"
                 )
             else:
                 error_code = getattr(exc, "code", "不明")
@@ -290,7 +351,7 @@ if pending:
             st.session_state["pending_saved"] = True
             st.rerun()
 
-data = load_data()
+data = load_data(user_id)
 if not data.empty:
     data["measurement_date"] = pd.to_datetime(data["measurement_date"])
     st.subheader("経時変化")

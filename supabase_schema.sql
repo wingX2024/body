@@ -1,7 +1,10 @@
--- Run this once in Supabase Dashboard > SQL Editor.
-create table if not exists public.body_measurements (
-  measurement_date date primary key,
-  sex text not null check (sex in ('女性', '男性')),
+-- Run this in Supabase Dashboard > SQL Editor.
+-- This app uses Supabase Auth + RLS. Each user can access only their own rows.
+
+create table if not exists public.body_measurements_private (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  measurement_date date not null,
+  sex text not null check (btrim(sex) in ('女性', '男性')),
   height_cm double precision not null check (height_cm between 100 and 230),
   weight_kg double precision not null check (weight_kg between 25 and 300),
   body_fat_pct double precision not null check (body_fat_pct between 2 and 70),
@@ -9,19 +12,52 @@ create table if not exists public.body_measurements (
   bone_mass_kg double precision not null check (bone_mass_kg between 0.5 and 10),
   bmr_kcal double precision not null,
   metabolic_age double precision not null check (metabolic_age between 18 and 90),
-  updated_at timestamp with time zone not null default now()
+  updated_at timestamp with time zone not null default now(),
+  primary key (user_id, measurement_date)
 );
 
-alter table public.body_measurements enable row level security;
+alter table public.body_measurements_private enable row level security;
 
--- Recreate the constraint as well when this script is run for an existing
--- table. CREATE TABLE IF NOT EXISTS alone does not update old constraints.
-alter table public.body_measurements
-  drop constraint if exists body_measurements_sex_check;
-alter table public.body_measurements
-  add constraint body_measurements_sex_check
-  check (btrim(sex) in ('女性', '男性'));
+revoke all on table public.body_measurements_private from anon;
+grant select, insert, update, delete
+  on table public.body_measurements_private to authenticated;
 
--- No public policies are created. The Streamlit server connects with the
--- service_role key stored in Secrets and bypasses RLS. Never put that key in
--- source control or expose it in browser-side code.
+drop policy if exists "Users can view own measurements"
+  on public.body_measurements_private;
+create policy "Users can view own measurements"
+  on public.body_measurements_private for select
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+drop policy if exists "Users can insert own measurements"
+  on public.body_measurements_private;
+create policy "Users can insert own measurements"
+  on public.body_measurements_private for insert
+  to authenticated
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists "Users can update own measurements"
+  on public.body_measurements_private;
+create policy "Users can update own measurements"
+  on public.body_measurements_private for update
+  to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists "Users can delete own measurements"
+  on public.body_measurements_private;
+create policy "Users can delete own measurements"
+  on public.body_measurements_private for delete
+  to authenticated
+  using ((select auth.uid()) = user_id);
+
+-- Lock the old shared table. It is retained only so existing records are not
+-- destroyed. The updated app never reads from it.
+do $$
+begin
+  if to_regclass('public.body_measurements') is not null then
+    alter table public.body_measurements enable row level security;
+    revoke all on table public.body_measurements from anon, authenticated;
+  end if;
+end
+$$;
