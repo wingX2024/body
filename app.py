@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 from supabase import Client, create_client
+from postgrest.exceptions import APIError
 
 from calculations import (
     bmi,
@@ -36,6 +37,10 @@ def supabase_client() -> Client:
         raise SupabaseConfigurationError(
             "SUPABASE_URL または SUPABASE_KEY が設定されていません。"
         ) from exc
+    if str(key).startswith("sb_publishable_"):
+        raise SupabaseConfigurationError(
+            "SUPABASE_KEYにPublishable keyが設定されています。書き込み可能なsb_secret_から始まるSecret keyへ変更してください。"
+        )
     return create_client(url, key)
 
 
@@ -259,13 +264,27 @@ if pending:
     if not st.session_state.get("pending_saved") and st.button(
         "この計算結果を登録する", type="primary", use_container_width=True
     ):
-        replaced = save_row(pending)
-        if replaced:
-            st.session_state["flash_message"] = "同じ日付の記録を今回の計算結果で更新しました。"
+        try:
+            replaced = save_row(pending)
+        except APIError as exc:
+            if getattr(exc, "code", None) == "42501":
+                st.error(
+                    "Supabaseの書き込み権限がありません。Streamlit SecretsのSUPABASE_KEYを、"
+                    "SupabaseのSecret key（sb_secret_で始まる値）へ変更してください。"
+                )
+            else:
+                st.error(
+                    "Supabaseへの登録に失敗しました。Supabaseのテーブル定義とStreamlit Cloudのログを確認してください。"
+                )
+        except Exception:
+            st.error("Supabaseとの通信中にエラーが発生しました。時間をおいて再度登録してください。")
         else:
-            st.session_state["flash_message"] = "計算結果を登録しました。"
-        st.session_state["pending_saved"] = True
-        st.rerun()
+            if replaced:
+                st.session_state["flash_message"] = "同じ日付の記録を今回の計算結果で更新しました。"
+            else:
+                st.session_state["flash_message"] = "計算結果を登録しました。"
+            st.session_state["pending_saved"] = True
+            st.rerun()
 
 data = load_data()
 if not data.empty:
