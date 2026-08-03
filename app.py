@@ -273,8 +273,11 @@ if pending:
                     "SupabaseのSecret key（sb_secret_で始まる値）へ変更してください。"
                 )
             else:
+                error_code = getattr(exc, "code", "不明")
+                error_message = getattr(exc, "message", "詳細なし")
                 st.error(
-                    "Supabaseへの登録に失敗しました。Supabaseのテーブル定義とStreamlit Cloudのログを確認してください。"
+                    "Supabaseへの登録に失敗しました。"
+                    f" エラーコード: {error_code} / メッセージ: {error_message}"
                 )
         except Exception:
             st.error("Supabaseとの通信中にエラーが発生しました。時間をおいて再度登録してください。")
